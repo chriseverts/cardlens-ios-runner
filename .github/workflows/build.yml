@@ -1,0 +1,61 @@
+name: Encrypted iOS build
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: encrypted-ios-build
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Decrypt source
+        env:
+          CARDLENS_BUILD_KEY: ${{ secrets.CARDLENS_BUILD_KEY }}
+        run: |
+          set -euo pipefail
+          node cloud-envelope.cjs open source.tar.gz.enc "$RUNNER_TEMP/source.tar.gz"
+          mkdir -p "$RUNNER_TEMP/source"
+          tar -xzf "$RUNNER_TEMP/source.tar.gz" -C "$RUNNER_TEMP/source"
+      - name: Build with existing Apple credentials
+        env:
+          APPLE_TEAM_ID: 43UZJ9Q4JJ
+          CARDLENS_APPLE_PROFILE: CardLens App Store
+          CERTIFICATE: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          PROFILE: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          CI: '1'
+        run: |
+          cd "$RUNNER_TEMP/source"
+          mkdir -p artifacts
+          set +e
+          bash scripts/build-ios-ci.sh > artifacts/cloud-build.log 2>&1
+          BUILD_EXIT=$?
+          echo "$BUILD_EXIT" > artifacts/build-exit-code.txt
+          echo "Build exit code: $BUILD_EXIT. Detailed logs are included in the encrypted result."
+          exit "$BUILD_EXIT"
+      - name: Encrypt result and logs
+        if: always()
+        env:
+          CARDLENS_BUILD_KEY: ${{ secrets.CARDLENS_BUILD_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -d "$RUNNER_TEMP/source/artifacts" ]; then
+            tar -czf "$RUNNER_TEMP/result.tar.gz" -C "$RUNNER_TEMP/source/artifacts" .
+            node cloud-envelope.cjs seal "$RUNNER_TEMP/result.tar.gz" result.tar.gz.enc
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: encrypted-ios-result
+          path: result.tar.gz.enc
+          retention-days: 1
