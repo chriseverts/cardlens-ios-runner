@@ -1,0 +1,38 @@
+name: Encrypted TestFlight upload
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  upload:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Upload existing signed binary
+        env:
+          CARDLENS_BUILD_KEY: ${{ secrets.CARDLENS_BUILD_KEY }}
+          APPLE_KEY: ${{ secrets.APPLE_UPLOAD_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/result" "$HOME/.appstoreconnect/private_keys"
+          trap 'rm -f "$HOME/.appstoreconnect/private_keys/AuthKey_7ZLWHC57D2.p8" "$RUNNER_TEMP/app.ipa"' EXIT
+          printf '%s' "$APPLE_KEY" > "$HOME/.appstoreconnect/private_keys/AuthKey_7ZLWHC57D2.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_7ZLWHC57D2.p8"
+          node cloud-envelope.cjs open upload.ipa.enc "$RUNNER_TEMP/app.ipa"
+          set +e
+          xcrun altool --upload-app -f "$RUNNER_TEMP/app.ipa" -t ios --apiKey 7ZLWHC57D2 --apiIssuer 639be4ad-609c-47ce-8766-e8702bfe2e9b > "$RUNNER_TEMP/result/upload.log" 2>&1
+          STATUS=$?
+          set -e
+          echo "$STATUS" > "$RUNNER_TEMP/result/upload-exit-code.txt"
+          tar -czf "$RUNNER_TEMP/result.tar.gz" -C "$RUNNER_TEMP/result" .
+          node cloud-envelope.cjs seal "$RUNNER_TEMP/result.tar.gz" result.tar.gz.enc
+          exit "$STATUS"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: encrypted-ios-result
+          path: result.tar.gz.enc
+          retention-days: 1
