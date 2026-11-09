@@ -1,0 +1,35 @@
+name: Encrypted native OCR check
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Verify encrypted source fixture
+        env:
+          CARDLENS_BUILD_KEY: ${{ secrets.CARDLENS_BUILD_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/source" "$RUNNER_TEMP/result"
+          node cloud-envelope.cjs open source.tar.gz.enc "$RUNNER_TEMP/source.tar.gz"
+          tar -xzf "$RUNNER_TEMP/source.tar.gz" -C "$RUNNER_TEMP/source"
+          set +e
+          swift "$RUNNER_TEMP/source/scripts/verify-vision-ocr.swift" > "$RUNNER_TEMP/result/vision-ocr.log" 2>&1
+          STATUS=$?
+          set -e
+          echo "$STATUS" > "$RUNNER_TEMP/result/verify-exit-code.txt"
+          tar -czf "$RUNNER_TEMP/result.tar.gz" -C "$RUNNER_TEMP/result" .
+          node cloud-envelope.cjs seal "$RUNNER_TEMP/result.tar.gz" result.tar.gz.enc
+          exit "$STATUS"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: encrypted-ios-result
+          path: result.tar.gz.enc
+          retention-days: 1
